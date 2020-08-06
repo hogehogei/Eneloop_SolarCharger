@@ -54,19 +54,21 @@ TIM_HandleTypeDef htim14;
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
-#define sk_SolarPanelOpenVoltSensNum ((uint32_t)10)        // 太陽電?��?開放電出検�??��回数
-static const uint32_t sk_BattChargeFinishTime = 500;       // バッ?��?リ電圧終�?判定時間[10ms]
+static constexpr uint32_t sk_BattChargeFinishTime = 500;       // バッテリ充電終了判定時間[10ms]
 
 // ローパスフィルタの定数
 // Cutoff   = 0.1s = 10[Hz]
 // Sampling = 1ms  = 0.001[s]
 // Const = (Cutoff / (Cutoff + Sampling)) = 0.990099 ≒ 0.99
-static const uint32_t sk_LPF_Precision          = 100;
-static const uint32_t sk_SolarPanelVoltLPFConst = 99;
-static const uint32_t sk_BattVoltLPFConst       = 99;
-static const uint32_t sk_ADCRefVoltLPFConst     = 99;
+static constexpr uint32_t sk_LPF_Precision          = 100;
+static constexpr uint32_t sk_SolarPanelVoltLPFConst = 99;
+static constexpr uint32_t sk_BattVoltLPFConst       = 99;
+static constexpr uint32_t sk_ADCRefVoltLPFConst     = 99;
 
-#define sk_ADC_Covnert_DataSize ((uint32_t)4)
+static constexpr uint32_t sk_SolarPanelOpenVoltDiff = 20;              // 開放電圧測定時差分電圧[mV]
+static constexpr uint32_t sk_SolarPanelOpenVoltSensStableTime = 10;    // 開放電圧測定安定回数
+
+static constexpr uint32_t sk_ADC_Covnert_DataSize = 4;
 static uint16_t s_ADC_ConvertData[sk_ADC_Covnert_DataSize];
 
 static int s_10msTickCount = 0;
@@ -92,7 +94,8 @@ static uint32_t s_SolarPanel_MPPT_TargetMillVolt = 0;
 static bool s_IsSolarPanelOpenVoltSensing = false;
 static bool s_IsSolarPanelVoltDetect = false;
 static uint32_t s_SolarPanelVoltSensCnt = 0;
-static uint16_t s_SolarPanelVoltBuff[sk_SolarPanelOpenVoltSensNum];
+static uint16_t s_SolarPanelVoltBuffBefore;
+static uint16_t s_SolarPanelVoltBuff;
 
 static uint32_t s_ADCRefMillVolt = 0;
 
@@ -581,9 +584,9 @@ static void MPPT_CheckSolarPanelMPPTVolt()
   uint32_t target_volt = 0;
 
   open_millvolt = SenseSolarPanelOpenVolt();
-  target_volt = (open_millvolt * 76 / 100);     // 解放電圧の0.76倍�??��電圧を目標にする
+  target_volt = (open_millvolt * 76 / 100);     // 解放電圧の0.76倍の電圧を目標にする
 
-  // 2.4V 以下だとマイコンが動作できな?��?ので?��?2.4V以上を目標にする
+  // 2.4V 以下だとマイコンが動作できないので、2.4V以上を目標にする
   if( target_volt < 2400 ){
     target_volt = 2400;
   }
@@ -657,18 +660,16 @@ static void Show_Voltage()
 
 static uint32_t SenseSolarPanelOpenVolt()
 {
-  uint32_t adcval = 0;
-
   s_IsSolarPanelOpenVoltSensing = true;
   s_SolarPanelVoltSensCnt = 0;
   PWM_SetValue( 0 );
 
   while( 1 ) {
     if( s_IsSolarPanelVoltDetect ){
-      uint32_t diff = std::max( s_SolarPanelVoltBuff[0], s_SolarPanelVoltBuff[1] ) - std::min( s_SolarPanelVoltBuff[0], s_SolarPanelVoltBuff[1] );
-      if( diff < 20 ){
+      uint32_t diff = std::max( s_SolarPanelVoltBuff, s_SolarPanelVoltBuffBefore ) - std::min( s_SolarPanelVoltBuff, s_SolarPanelVoltBuffBefore );
+      if( diff < sk_SolarPanelOpenVoltDiff ){
         s_SolarPanelVoltSensCnt++;
-        if( s_SolarPanelVoltSensCnt > 10 ){
+        if( s_SolarPanelVoltSensCnt > sk_SolarPanelOpenVoltSensStableTime ){
           break;
         }
       }
@@ -676,7 +677,7 @@ static uint32_t SenseSolarPanelOpenVolt()
         s_SolarPanelVoltSensCnt = 0;
       }
 
-      s_SolarPanelVoltBuff[1] = s_SolarPanelVoltBuff[0];
+      s_SolarPanelVoltBuffBefore = s_SolarPanelVoltBuff;
       s_IsSolarPanelVoltDetect = false;
     }
     asm( "wfi" );
@@ -685,14 +686,13 @@ static uint32_t SenseSolarPanelOpenVolt()
   PWM_SetValue( s_MPPT_PWMWidth );
   s_IsSolarPanelOpenVoltSensing = false;
 
-  adcval = s_SolarPanelVoltBuff[0];
-  return SolarPanel_ADCValToMillVolt( adcval );
+  return SolarPanel_ADCValToMillVolt( s_SolarPanelVoltBuff );
 }
 
 static uint32_t SolarPanel_ADCValToMillVolt( uint32_t adcval )
 {
-  // 5V -> 1k / 1k の?��?圧で 降圧
-  // 3.3V -> 6.6V フルスケール
+  // 5V -> 1k / 1k の分圧で 降圧
+  // adcRefVoltの2倍の電圧がフルスケール
   //static constexpr float sk_Scale = ((6.6f / 4096.0f) * 1000.0f);
   // return (sk_Scale * adcval) + 0.5f;
 
@@ -701,7 +701,7 @@ static uint32_t SolarPanel_ADCValToMillVolt( uint32_t adcval )
 
 static uint32_t Batt_ADCValToMillVolt( uint32_t adcval )
 {
-  // 3.3V フルスケール
+  // adcRefVolt フルスケール
   //static constexpr float sk_Scale = ((3.3f / 4096.0f) * 1000.0f);
   //return (sk_Scale * (float)adcval) + 0.5f;
 
@@ -721,14 +721,6 @@ static uint32_t Get_SolarPanelPWMScale()
 
 static uint32_t Get_SolarPanelVolt()
 {
-  // 現在のソーラーパネル側電圧を取?��?
-  // ADC Reference 電圧と、ソーラーパネルの出力電圧を�?圧した電圧とを比�?
-  // 
-  // マイコン電圧?��?3.3V以下になった�??��合�??��ADC Reference 電圧とマイコンVCC電圧は共通化して?��?る�??��で
-  // ソーラーパネルの電圧を正しく測れな?��?
-  // しかし�??��そもそも?��??��イコンVCC電圧?��?3.3V以下�??��とき�??��ソーラーパネルの電圧??��?��?��??��イコンVCC電圧??��?��ADC Reference電圧なので
-  // ADC Reference 電圧のほ?��?が低けれ�??��、そちらを採用すればそれなり�??��精度で計測できるは?��?
-  //return s_SolarPanelMillVolt > s_ADCRefMillVolt ? s_SolarPanelMillVolt : s_ADCRefMillVolt;
   return s_SolarPanelMillVolt;
 }
 
@@ -768,7 +760,7 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
 
   // SolarPanel voltage sensing
   if( s_IsSolarPanelOpenVoltSensing && !s_IsSolarPanelVoltDetect ){
-    s_SolarPanelVoltBuff[0] = s_ADC_ConvertData[0];
+    s_SolarPanelVoltBuff = s_ADC_ConvertData[0];
     s_IsSolarPanelVoltDetect = true;
   }
   else {
