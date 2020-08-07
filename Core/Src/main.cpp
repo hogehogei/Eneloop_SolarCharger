@@ -57,13 +57,13 @@ UART_HandleTypeDef huart1;
 static constexpr uint32_t sk_BattChargeFinishTime = 500;       // バッテリ充電終了判定時間[10ms]
 
 // ローパスフィルタの定数
-// Cutoff   = 0.1s = 10[Hz]
+// Cutoff   = 0.01s = 100[Hz]
 // Sampling = 1ms  = 0.001[s]
-// Const = (Cutoff / (Cutoff + Sampling)) = 0.990099 ≒ 0.99
-static constexpr uint32_t sk_LPF_Precision          = 100;
-static constexpr uint32_t sk_SolarPanelVoltLPFConst = 99;
-static constexpr uint32_t sk_BattVoltLPFConst       = 99;
-static constexpr uint32_t sk_ADCRefVoltLPFConst     = 99;
+// Const = (Cutoff / (Cutoff + Sampling)) = 0.909091 ≒ 0.909
+static constexpr uint32_t sk_LPF_Precision          = 1000;
+static constexpr uint32_t sk_SolarPanelVoltLPFConst = 909;
+static constexpr uint32_t sk_BattVoltLPFConst       = 909;
+static constexpr uint32_t sk_ADCRefVoltLPFConst     = 909;
 
 static constexpr uint32_t sk_SolarPanelOpenVoltDiff = 20;              // 開放電圧測定時差分電圧[mV]
 static constexpr uint32_t sk_SolarPanelOpenVoltSensStableTime = 10;    // 開放電圧測定安定回数
@@ -206,7 +206,7 @@ int main(void)
         Set_LEDBlinkTime( 100 );
       }
       else {
-        MPPT_SetPWMWidth();
+        //MPPT_SetPWMWidth();
         CheckBattChargeFinished();
         Set_LEDBlinkTime( 0 );
       }
@@ -569,10 +569,14 @@ static void MPPT_SetPWMWidth()
   uint32_t current_millvolt = Get_SolarPanelVolt();
 
   if( current_millvolt > s_SolarPanel_MPPT_TargetMillVolt ){
-    s_MPPT_PWMWidth = s_MPPT_PWMWidth + 1 < Get_SolarPanelPWMScale() ? s_MPPT_PWMWidth + 1 : s_MPPT_PWMWidth;
+    uint32_t diff = current_millvolt - s_SolarPanel_MPPT_TargetMillVolt;
+    uint32_t pwm  = diff * 100 / 4167;
+    s_MPPT_PWMWidth = s_MPPT_PWMWidth + pwm < Get_SolarPanelPWMScale() ? s_MPPT_PWMWidth + pwm : Get_SolarPanelPWMScale();
   }
   else {
-    s_MPPT_PWMWidth = s_MPPT_PWMWidth > 0 ? s_MPPT_PWMWidth - 1 : 0;
+    uint32_t diff = s_SolarPanel_MPPT_TargetMillVolt - current_millvolt;
+    uint32_t pwm  = diff * 100 / 4167;
+    s_MPPT_PWMWidth = s_MPPT_PWMWidth > pwm ? s_MPPT_PWMWidth - pwm : 0;
   }
 
   PWM_SetValue( s_MPPT_PWMWidth );
@@ -666,7 +670,10 @@ static uint32_t SenseSolarPanelOpenVolt()
 
   while( 1 ) {
     if( s_IsSolarPanelVoltDetect ){
+      // 電圧の差分を取得
       uint32_t diff = std::max( s_SolarPanelVoltBuff, s_SolarPanelVoltBuffBefore ) - std::min( s_SolarPanelVoltBuff, s_SolarPanelVoltBuffBefore );
+
+      // 開放電圧が安定するまで測定を繰り返す
       if( diff < sk_SolarPanelOpenVoltDiff ){
         s_SolarPanelVoltSensCnt++;
         if( s_SolarPanelVoltSensCnt > sk_SolarPanelOpenVoltSensStableTime ){
@@ -726,6 +733,10 @@ static uint32_t Get_SolarPanelVolt()
 
 static void MsTimerHandler()
 {
+  if( !s_IsBattChargeFinish && !s_IsSolarPanelOpenVoltSensing ){
+    MPPT_SetPWMWidth();
+  }
+
   ++s_10msTickCount;
   if( s_10msTickCount >= 10 ){
     s_10msTickCount = 0;
