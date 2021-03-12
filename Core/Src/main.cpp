@@ -57,16 +57,16 @@ UART_HandleTypeDef huart1;
 static constexpr uint32_t sk_BattChargeFinishTime = 500;       // バッテリ充電終了判定時間[10ms]
 
 // ローパスフィルタの定数
-// Cutoff   = 0.01s = 100[Hz]
-// Sampling = 1ms  = 0.001[s]
+// Cutoff   = 0.01s  = 100[Hz]
+// Sampling = 0.1ms  = 0.0001[s]
 // Const = (Cutoff / (Cutoff + Sampling)) = 0.909091 ≒ 0.909
 static constexpr uint32_t sk_LPF_Precision          = 1000;
 static constexpr uint32_t sk_SolarPanelVoltLPFConst = 909;
 static constexpr uint32_t sk_BattVoltLPFConst       = 909;
 static constexpr uint32_t sk_ADCRefVoltLPFConst     = 909;
 
-static constexpr uint32_t sk_SolarPanelOpenVoltDiff = 20;              // 開放電圧測定時差分電圧[mV]
-static constexpr uint32_t sk_SolarPanelOpenVoltSensStableTime = 10;    // 開放電圧測定安定回数
+static constexpr uint32_t sk_SolarPanelOpenVoltDiff = 10;               // 開放電圧測定時差分電圧[mV]
+static constexpr uint32_t sk_SolarPanelOpenVoltSensStableTime = 5;      // 開放電圧測定安定回数
 
 static constexpr uint32_t sk_ADC_Covnert_DataSize = 4;
 static uint16_t s_ADC_ConvertData[sk_ADC_Covnert_DataSize];
@@ -202,11 +202,12 @@ int main(void)
       
       if( s_IsBattChargeFinish ){
         // PWMを停止
-        PWM_SetValue( 0 );
+        s_MPPT_PWMWidth = 0;
+        PWM_SetValue( s_MPPT_PWMWidth );
         Set_LEDBlinkTime( 100 );
       }
       else {
-        //MPPT_SetPWMWidth();
+        MPPT_SetPWMWidth();
         CheckBattChargeFinished();
         Set_LEDBlinkTime( 0 );
       }
@@ -229,6 +230,8 @@ int main(void)
 
     /* USER CODE BEGIN 3 */
   }
+
+  asm( "wfi ");
   /* USER CODE END 3 */
 }
 
@@ -242,7 +245,8 @@ void SystemClock_Config(void)
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
   RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
 
-  /** Initializes the CPU, AHB and APB busses clocks 
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
   */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI48;
   RCC_OscInitStruct.HSI48State = RCC_HSI48_ON;
@@ -251,7 +255,7 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-  /** Initializes the CPU, AHB and APB busses clocks 
+  /** Initializes the CPU, AHB and APB buses clocks
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1;
@@ -259,7 +263,7 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV2;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
 
-  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_0) != HAL_OK)
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_1) != HAL_OK)
   {
     Error_Handler();
   }
@@ -288,7 +292,7 @@ static void MX_ADC_Init(void)
   /* USER CODE BEGIN ADC_Init 1 */
 
   /* USER CODE END ADC_Init 1 */
-  /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion) 
+  /** Configure the global features of the ADC (Clock, Resolution, Data Alignment and number of conversion)
   */
   hadc.Instance = ADC1;
   hadc.Init.ClockPrescaler = ADC_CLOCK_SYNC_PCLK_DIV4;
@@ -308,7 +312,7 @@ static void MX_ADC_Init(void)
   {
     Error_Handler();
   }
-  /** Configure for the selected ADC regular channel to be converted. 
+  /** Configure for the selected ADC regular channel to be converted.
   */
   sConfig.Channel = ADC_CHANNEL_0;
   sConfig.Rank = ADC_RANK_CHANNEL_NUMBER;
@@ -317,21 +321,21 @@ static void MX_ADC_Init(void)
   {
     Error_Handler();
   }
-  /** Configure for the selected ADC regular channel to be converted. 
+  /** Configure for the selected ADC regular channel to be converted.
   */
   sConfig.Channel = ADC_CHANNEL_1;
   if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK)
   {
     Error_Handler();
   }
-  /** Configure for the selected ADC regular channel to be converted. 
+  /** Configure for the selected ADC regular channel to be converted.
   */
   sConfig.Channel = ADC_CHANNEL_TEMPSENSOR;
   if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK)
   {
     Error_Handler();
   }
-  /** Configure for the selected ADC regular channel to be converted. 
+  /** Configure for the selected ADC regular channel to be converted.
   */
   sConfig.Channel = ADC_CHANNEL_VREFINT;
   if (HAL_ADC_ConfigChannel(&hadc, &sConfig) != HAL_OK)
@@ -365,7 +369,7 @@ static void MX_TIM1_Init(void)
   htim1.Instance = TIM1;
   htim1.Init.Prescaler = 24-1;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 1000-1;
+  htim1.Init.Period = 100-1;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
   htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
@@ -507,11 +511,12 @@ static void MX_USART1_UART_Init(void)
 
 }
 
-/** 
+/**
   * Enable DMA controller clock
   */
-static void MX_DMA_Init(void) 
+static void MX_DMA_Init(void)
 {
+
   /* DMA controller clock enable */
   __HAL_RCC_DMA1_CLK_ENABLE();
 
@@ -519,6 +524,7 @@ static void MX_DMA_Init(void)
   /* DMA1_Channel1_IRQn interrupt configuration */
   HAL_NVIC_SetPriority(DMA1_Channel1_IRQn, 0, 0);
   HAL_NVIC_EnableIRQ(DMA1_Channel1_IRQn);
+
 }
 
 /**
@@ -569,14 +575,14 @@ static void MPPT_SetPWMWidth()
   uint32_t current_millvolt = Get_SolarPanelVolt();
 
   if( current_millvolt > s_SolarPanel_MPPT_TargetMillVolt ){
-    uint32_t diff = current_millvolt - s_SolarPanel_MPPT_TargetMillVolt;
-    uint32_t pwm  = diff * 100 / 4167;
-    s_MPPT_PWMWidth = s_MPPT_PWMWidth + pwm < Get_SolarPanelPWMScale() ? s_MPPT_PWMWidth + pwm : Get_SolarPanelPWMScale();
+    //uint32_t diff = current_millvolt - s_SolarPanel_MPPT_TargetMillVolt;
+    //uint32_t pwm  = diff * 100 / 4167;
+    s_MPPT_PWMWidth = s_MPPT_PWMWidth + 1 < Get_SolarPanelPWMScale() ? s_MPPT_PWMWidth + 1 : Get_SolarPanelPWMScale();
   }
   else {
-    uint32_t diff = s_SolarPanel_MPPT_TargetMillVolt - current_millvolt;
-    uint32_t pwm  = diff * 100 / 4167;
-    s_MPPT_PWMWidth = s_MPPT_PWMWidth > pwm ? s_MPPT_PWMWidth - pwm : 0;
+    //uint32_t diff = s_SolarPanel_MPPT_TargetMillVolt - current_millvolt;
+    //uint32_t pwm  = diff * 100 / 4167;
+    s_MPPT_PWMWidth = s_MPPT_PWMWidth > 0 ? s_MPPT_PWMWidth - 1 : 0;
   }
 
   PWM_SetValue( s_MPPT_PWMWidth );
@@ -588,7 +594,7 @@ static void MPPT_CheckSolarPanelMPPTVolt()
   uint32_t target_volt = 0;
 
   open_millvolt = SenseSolarPanelOpenVolt();
-  target_volt = (open_millvolt * 76 / 100);     // 解放電圧の0.76倍の電圧を目標にする
+  target_volt = (open_millvolt * 83 / 100);     // 解放電圧の0.83倍の電圧を目標にする
 
   // 2.4V 以下だとマイコンが動作できないので、2.4V以上を目標にする
   if( target_volt < 2400 ){
@@ -776,17 +782,17 @@ void HAL_ADC_ConvCpltCallback(ADC_HandleTypeDef* hadc)
   }
   else {
     millvolt = SolarPanel_ADCValToMillVolt( s_ADC_ConvertData[0] );
-    s_SolarPanelMillVolt = (((sk_LPF_Precision - sk_SolarPanelVoltLPFConst) * millvolt) + (sk_SolarPanelVoltLPFConst * s_SolarPanelMillVolt)) / sk_LPF_Precision;
+    s_SolarPanelMillVolt = millvolt; //(((sk_LPF_Precision - sk_SolarPanelVoltLPFConst) * millvolt) + (sk_SolarPanelVoltLPFConst * s_SolarPanelMillVolt)) / sk_LPF_Precision;
     s_SolarPanelVoltSensCnt = 0;
   }
 
   // Batt voltage sensing
   millvolt = Batt_ADCValToMillVolt( s_ADC_ConvertData[1] );
-  s_BattMillVolt = (((sk_LPF_Precision - sk_BattVoltLPFConst) * millvolt) + (sk_BattVoltLPFConst * s_BattMillVolt)) / sk_LPF_Precision;
+  s_BattMillVolt = millvolt; //(((sk_LPF_Precision - sk_BattVoltLPFConst) * millvolt) + (sk_BattVoltLPFConst * s_BattMillVolt)) / sk_LPF_Precision;
 
   // ADCRef voltage sensing
   millvolt = ADCRef_ADCValToMillVolt( s_ADC_ConvertData[3] );
-  s_ADCRefMillVolt = (((sk_LPF_Precision - sk_ADCRefVoltLPFConst) * millvolt) + (sk_ADCRefVoltLPFConst * s_ADCRefMillVolt)) / sk_LPF_Precision;
+  s_ADCRefMillVolt = millvolt; //(((sk_LPF_Precision - sk_ADCRefVoltLPFConst) * millvolt) + (sk_ADCRefVoltLPFConst * s_ADCRefMillVolt)) / sk_LPF_Precision;
 }
 
 /* USER CODE END 4 */
